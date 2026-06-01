@@ -1,7 +1,8 @@
 import { useState, useRef } from 'react';
 import { useDataStore } from '../store/dataStore';
 import { useAuthStore } from '../store/authStore';
-import { Upload, CheckCircle, XCircle, AlertCircle, FileSpreadsheet } from 'lucide-react';
+import { useSettingsStore, mesesPertinentes, proximoMes } from '../store/settingsStore';
+import { Upload, CheckCircle, XCircle, AlertCircle, FileSpreadsheet, Settings } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import type { NotaFiscal, NotaDebito, ApontamentoRecord, HistoricoImportacao } from '../types';
 
@@ -374,6 +375,28 @@ function parseApontamento(wb: XLSX.WorkBook): ApontamentoRecord[] {
 export default function ImportacaoPage() {
   const { setNotas, setNotasDebito, setApontamento, addHistorico } = useDataStore();
   const { user } = useAuthStore();
+  const { mesReferencia, setMesReferencia } = useSettingsStore();
+
+  const [mesBaseInput, setMesBaseInput] = useState(mesReferencia);
+  const [mesSalvo, setMesSalvo] = useState(false);
+
+  const [mesNum, anoNum] = mesReferencia.split('/').map(Number);
+  const [mesBaseLabel, mesProxLabel] = mesesPertinentes(mesReferencia).map(m => {
+    const [mm, aa] = m.split('/');
+    const nomes = ['Jan','Fev','Mar','Abr','Mai','Jun','Jul','Ago','Set','Out','Nov','Dez'];
+    return `${nomes[parseInt(mm) - 1]}/${aa}`;
+  });
+
+  const handleSalvarMes = () => {
+    const [m, a] = mesBaseInput.split('/').map(Number);
+    if (!m || !a || m < 1 || m > 12 || a < 2000) {
+      alert('Formato inválido. Use M/AAAA (ex: 4/2026)');
+      return;
+    }
+    setMesReferencia(mesBaseInput);
+    setMesSalvo(true);
+    setTimeout(() => setMesSalvo(false), 3000);
+  };
 
   const [erpState, setErpState] = useState<ImportState>({ status: 'idle', message: 'Base ERP_Geral', count: 0 });
   const [ndState, setNdState] = useState<ImportState>({ status: 'idle', message: 'Base ERP_ND (opcional)', count: 0 });
@@ -465,6 +488,65 @@ export default function ImportacaoPage() {
         <div className="page-header-info">
           <h1 className="page-title">Importar Dados</h1>
           <p className="page-subtitle">Importe os arquivos Excel do ERP para atualizar o dashboard</p>
+        </div>
+      </div>
+
+      {/* CARD: Configuração do Mês de Referência */}
+      <div className="card" style={{ marginBottom: 24, border: '1px solid rgba(99, 102, 241, 0.35)', background: 'linear-gradient(135deg, rgba(99,102,241,0.08), rgba(16,185,129,0.06))' }}>
+        <div className="card-header">
+          <span className="card-title" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <Settings size={16} style={{ color: 'var(--color-primary-light)' }} />
+            Mês de Referência (Competência Pertinente)
+          </span>
+          <span className="badge badge-info">Configuração do Ciclo</span>
+        </div>
+        <div className="card-body">
+          <p style={{ fontSize: '0.82rem', color: 'var(--color-text-muted)', marginBottom: 16 }}>
+            Define qual é o <strong>mês base</strong> do ciclo atual. O sistema vai considerar o mês informado e o <strong>mês seguinte</strong> como <em>Competências Pertinentes</em> — todos os demais serão tratados como retroativos.
+          </p>
+
+          <div style={{ display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap' }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+              <label style={{ fontSize: '0.78rem', color: 'var(--color-text-muted)', fontWeight: 600 }}>Mês Base (formato M/AAAA)</label>
+              <input
+                id="mes-referencia-input"
+                type="text"
+                value={mesBaseInput}
+                onChange={e => setMesBaseInput(e.target.value)}
+                placeholder="Ex: 4/2026"
+                style={{
+                  background: 'var(--color-surface)', border: '1px solid var(--color-border)',
+                  borderRadius: 'var(--radius-sm)', padding: '8px 14px',
+                  color: 'var(--color-text)', fontSize: '0.9rem', width: 140
+                }}
+              />
+            </div>
+
+            <button
+              id="btn-salvar-mes"
+              className={`btn ${mesSalvo ? 'btn-success' : 'btn-primary'}`}
+              style={{ alignSelf: 'flex-end', padding: '8px 20px' }}
+              onClick={handleSalvarMes}
+            >
+              {mesSalvo ? '✓ Salvo!' : 'Aplicar'}
+            </button>
+
+            <div style={{
+              background: 'rgba(16,185,129,0.1)', border: '1px solid rgba(16,185,129,0.25)',
+              borderRadius: 'var(--radius-sm)', padding: '8px 16px', fontSize: '0.82rem'
+            }}>
+              <span style={{ color: 'var(--color-text-muted)' }}>Competências pertinentes: </span>
+              <strong style={{ color: 'var(--color-success)' }}>{mesBaseLabel} + {mesProxLabel}</strong>
+            </div>
+
+            <div style={{
+              background: 'rgba(245,158,11,0.1)', border: '1px solid rgba(245,158,11,0.25)',
+              borderRadius: 'var(--radius-sm)', padding: '8px 16px', fontSize: '0.82rem'
+            }}>
+              <span style={{ color: 'var(--color-text-muted)' }}>Demais meses: </span>
+              <strong style={{ color: 'var(--color-warning)' }}>Retroativos</strong>
+            </div>
+          </div>
         </div>
       </div>
 

@@ -1,11 +1,36 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { useDataStore } from '../store/dataStore';
+import { useSettingsStore, mesesPertinentes, formatosPertinentes } from '../store/settingsStore';
 import { formatCurrency, formatPercent } from '../services/calculations';
-import { Sparkles, Eye, TrendingUp, DollarSign, Clock, CheckCircle, Layers, ShieldAlert } from 'lucide-react';
+import { Sparkles, Eye, TrendingUp, DollarSign, Clock, CheckCircle, Layers, ShieldAlert, Monitor, Minimize2, FileText as FilePDF } from 'lucide-react';
+import jsPDF from 'jspdf';
+import autoTable from 'jspdf-autotable';
 
 export default function VisaoHerick() {
   const { notas, notasDebito, apontamento } = useDataStore();
+  const { mesReferencia } = useSettingsStore();
   const [visaoFaturamento, setVisaoFaturamento] = useState<'BRUTO' | 'REALIZADO'>('BRUTO');
+  const [isPresentation, setIsPresentation] = useState(false);
+
+  // Modo Apresentação: adiciona/remove classe no body
+  useEffect(() => {
+    if (isPresentation) document.body.classList.add('presentation-mode');
+    else document.body.classList.remove('presentation-mode');
+    return () => document.body.classList.remove('presentation-mode');
+  }, [isPresentation]);
+
+  // Nomes amigáveis dos meses pertinentes
+  const nomeMeses = (m: string) => {
+    const [mm, aa] = m.split('/');
+    const nomes = ['Jan','Fev','Mar','Abr','Mai','Jun','Jul','Ago','Set','Out','Nov','Dez'];
+    return `${nomes[parseInt(mm) - 1]}/${aa}`;
+  };
+
+  // Meses pertinentes calculados a partir do mês de referência configurado
+  const [mesBase, mesProximo] = mesesPertinentes(mesReferencia);
+  const formatosMesesPert = formatosPertinentes(mesReferencia);
+  // ex: mesBase = '4/2026', mesProximo = '5/2026'
+  // ex: formatosMesesPert = ['4/2026', '2026-04', '5/2026', '2026-05']
 
   // ============================================================
   // LÓGICA 1: RESUMO DETALHADO DA ABA "FATURAMENTO GERAL"
@@ -15,30 +40,36 @@ export default function VisaoHerick() {
     const nfsAbertas = notas.filter(n => n.statusNF === 'ABERTA');
     const ndsAbertas = notasDebito.filter(n => n.status === 'ABERTA');
 
-    // Categorizar por período (Abril/2026 e Maio/2026 são pertinentes)
-    const isPertinenteNF = (n: typeof notas[0]) => n.mesAno === '4/2026' || n.mesAno === '5/2026';
+    // Categorizar por período pertinente (dinâmico, baseado no mês de referência configurado)
+    const isPertinenteNF = (n: typeof notas[0]) => n.mesAno === mesBase || n.mesAno === mesProximo;
     const isPertinenteND = (nd: typeof notasDebito[0]) => {
       const ref = nd.mesReferencia || '';
-      return ref.includes('2026-04') || ref.includes('2026-05') || ref.includes('4/2026') || ref.includes('5/2026');
+      return formatosMesesPert.some(f => ref.includes(f));
     };
 
-    // 1. Faturamento Pertinente (Abr/26 + Mai/26)
-    const nfPertinenteVal = nfsAbertas.filter(isPertinenteNF).reduce((s, n) => s + n.valorNotaFiscal, 0);
+    // Faturamento DO (Diário Oficial) para subtrair duplicidade
+    const doPertinenteVal = nfsAbertas.filter(n => n.origem === 'DIÁRIO OFICIAL' && isPertinenteNF(n)).reduce((s, n) => s + n.valorNotaFiscal, 0);
+    const doRetroativaVal = nfsAbertas.filter(n => n.origem === 'DIÁRIO OFICIAL' && !isPertinenteNF(n)).reduce((s, n) => s + n.valorNotaFiscal, 0);
+
+    // 1. Faturamento Pertinente (Abr/26 + Mai/26) (Descontando a duplicidade do DO)
+    const nfPertinenteVal = nfsAbertas.filter(isPertinenteNF).reduce((s, n) => s + n.valorNotaFiscal, 0) - doPertinenteVal;
     const ndPertinenteVal = ndsAbertas.filter(isPertinenteND).reduce((s, n) => s + n.valor, 0);
     const faturamentoPertinente = nfPertinenteVal + ndPertinenteVal;
 
-    // 2. Faturamento Retroativo Antigo (Todos os demais meses faturados, exceto Abr/26 + Mai/26)
-    const nfRetroativaVal = nfsAbertas.filter(n => !isPertinenteNF(n)).reduce((s, n) => s + n.valorNotaFiscal, 0);
+    // 2. Faturamento Retroativo Antigo (Descontando a duplicidade do DO)
+    const nfRetroativaVal = nfsAbertas.filter(n => !isPertinenteNF(n)).reduce((s, n) => s + n.valorNotaFiscal, 0) - doRetroativaVal;
     const ndRetroativaVal = ndsAbertas.filter(nd => !isPertinenteND(nd)).reduce((s, nd) => s + nd.valor, 0);
     const faturamentoRetroativo = nfRetroativaVal + ndRetroativaVal;
 
     // 3. Faturamento Bruto Consolidado (Tudo)
     const faturamentoTotalBruto = faturamentoPertinente + faturamentoRetroativo;
 
-    // 4. Taxa de Execução DRC (Faturamento DRC Abr/Mai vs Apontamento DRC Abr)
-    // Apontado DRC de Abril/2026 (mes=4, ano=2026 e não DETRAN)
+    // 4. Taxa de Execução DRC (Faturamento DRC competência pertinente vs Apontamento do mês base)
+    const [mesBaseNumStr, anoBaseNumStr] = mesBase.split('/');
+    const mesBaseNum = parseInt(mesBaseNumStr);
+    const anoBaseNum = parseInt(anoBaseNumStr);
     const apontadoDRC = apontamento
-      .filter(a => a.mes === 4 && a.ano === 2026 && a.sigla !== 'DETRAN')
+      .filter(a => a.mes === mesBaseNum && a.ano === anoBaseNum && a.sigla !== 'DETRAN')
       .reduce((s, a) => s + a.valorTotal, 0);
 
     // Faturado DRC Pertinente (Apenas DRC nas competências de Abr/Mai, excluindo DIÁRIO OFICIAL!)
@@ -66,10 +97,10 @@ export default function VisaoHerick() {
   // LÓGICA DE DESMEMBRAMENTO DE VALORES PEDIDOS PELO USUÁRIO (LÍQUIDO VS BRUTO)
   // ============================================================
   const desmembramentoValores = useMemo(() => {
-    const isPertinenteNF = (n: typeof notas[0]) => n.mesAno === '4/2026' || n.mesAno === '5/2026';
+    const isPertinenteNF = (n: typeof notas[0]) => n.mesAno === mesBase || n.mesAno === mesProximo;
     const isPertinenteND = (nd: typeof notasDebito[0]) => {
       const ref = nd.mesReferencia || '';
-      return ref.includes('2026-04') || ref.includes('2026-05') || ref.includes('4/2026') || ref.includes('5/2026');
+      return formatosMesesPert.some(f => ref.includes(f));
     };
 
     const nfsAbertas = notas.filter(n => n.statusNF === 'ABERTA');
@@ -77,17 +108,19 @@ export default function VisaoHerick() {
 
     // === CÁLCULO DE VALOR BRUTO (TODAS AS NOTAS - ABERTAS + CANCELADAS) ===
     // NFs (qualquer status, valorBruto) + NDs (abertas, valor)
-    const nfBrutoTotal = notas.reduce((s, n) => s + n.valorBruto, 0);
-    const ndBrutoTotal = ndsAbertas.reduce((s, n) => s + n.valor, 0);
-    const totalBruto = nfBrutoTotal + ndBrutoTotal;
-
-    // Faturamento DRC
-    const drc_Bruto_Pert = notas.filter(n => n.origem === 'DRC' && isPertinenteNF(n)).reduce((s, n) => s + n.valorBruto, 0);
-    const drc_Bruto_Retro = notas.filter(n => n.origem === 'DRC' && !isPertinenteNF(n)).reduce((s, n) => s + n.valorBruto, 0);
-
-    // Faturamento DO (Diário Oficial)
+    // Subtrai-se as NFs de DO, pois elas estão em duplicidade dentro das NFs de DRC na base
     const do_Bruto_Pert = notas.filter(n => n.origem === 'DIÁRIO OFICIAL' && isPertinenteNF(n)).reduce((s, n) => s + n.valorBruto, 0);
     const do_Bruto_Retro = notas.filter(n => n.origem === 'DIÁRIO OFICIAL' && !isPertinenteNF(n)).reduce((s, n) => s + n.valorBruto, 0);
+    
+    const nfBrutoTotal = notas.reduce((s, n) => s + n.valorBruto, 0);
+    const ndBrutoTotal = ndsAbertas.reduce((s, n) => s + n.valor, 0);
+    const totalBruto = nfBrutoTotal + ndBrutoTotal - do_Bruto_Pert - do_Bruto_Retro;
+
+    // Faturamento DRC (Removendo o valor do DO que está embutido/duplicado na base como DRC)
+    const drc_Bruto_Pert = notas.filter(n => n.origem === 'DRC' && isPertinenteNF(n)).reduce((s, n) => s + n.valorBruto, 0) - do_Bruto_Pert;
+    const drc_Bruto_Retro = notas.filter(n => n.origem === 'DRC' && !isPertinenteNF(n)).reduce((s, n) => s + n.valorBruto, 0) - do_Bruto_Retro;
+
+
 
     const detran_Bruto_Pert = notas.filter(n => n.origem === 'DETRAN' && isPertinenteNF(n)).reduce((s, n) => s + n.valorBruto, 0);
     const detran_Bruto_Retro = notas.filter(n => n.origem === 'DETRAN' && !isPertinenteNF(n)).reduce((s, n) => s + n.valorBruto, 0);
@@ -97,17 +130,19 @@ export default function VisaoHerick() {
 
     // === CÁLCULO DE VALOR NOTA FISCAL (NOTAS ABERTAS APENAS) ===
     // NFs (status ABERTA, valorNotaFiscal) + NDs (abertas, valor)
-    const nfLiquidoTotal = nfsAbertas.reduce((s, n) => s + n.valorNotaFiscal, 0);
-    const ndLiquidoTotal = ndsAbertas.reduce((s, n) => s + n.valor, 0);
-    const totalLiquido = nfLiquidoTotal + ndLiquidoTotal;
-
-    // Faturamento DRC
-    const drc_Liquido_Pert = nfsAbertas.filter(n => n.origem === 'DRC' && isPertinenteNF(n)).reduce((s, n) => s + n.valorNotaFiscal, 0);
-    const drc_Liquido_Retro = nfsAbertas.filter(n => n.origem === 'DRC' && !isPertinenteNF(n)).reduce((s, n) => s + n.valorNotaFiscal, 0);
-
-    // Faturamento DO (Diário Oficial)
+    // Subtrai-se as NFs de DO, pois elas estão em duplicidade dentro das NFs de DRC na base
     const do_Liquido_Pert = nfsAbertas.filter(n => n.origem === 'DIÁRIO OFICIAL' && isPertinenteNF(n)).reduce((s, n) => s + n.valorNotaFiscal, 0);
     const do_Liquido_Retro = nfsAbertas.filter(n => n.origem === 'DIÁRIO OFICIAL' && !isPertinenteNF(n)).reduce((s, n) => s + n.valorNotaFiscal, 0);
+    
+    const nfLiquidoTotal = nfsAbertas.reduce((s, n) => s + n.valorNotaFiscal, 0);
+    const ndLiquidoTotal = ndsAbertas.reduce((s, n) => s + n.valor, 0);
+    const totalLiquido = nfLiquidoTotal + ndLiquidoTotal - do_Liquido_Pert - do_Liquido_Retro;
+
+    // Faturamento DRC (Removendo o valor do DO que está embutido/duplicado na base como DRC)
+    const drc_Liquido_Pert = nfsAbertas.filter(n => n.origem === 'DRC' && isPertinenteNF(n)).reduce((s, n) => s + n.valorNotaFiscal, 0) - do_Liquido_Pert;
+    const drc_Liquido_Retro = nfsAbertas.filter(n => n.origem === 'DRC' && !isPertinenteNF(n)).reduce((s, n) => s + n.valorNotaFiscal, 0) - do_Liquido_Retro;
+
+
 
     const detran_Liquido_Pert = nfsAbertas.filter(n => n.origem === 'DETRAN' && isPertinenteNF(n)).reduce((s, n) => s + n.valorNotaFiscal, 0);
     const detran_Liquido_Retro = nfsAbertas.filter(n => n.origem === 'DETRAN' && !isPertinenteNF(n)).reduce((s, n) => s + n.valorNotaFiscal, 0);
@@ -165,18 +200,21 @@ export default function VisaoHerick() {
       fatMap.set(sigla, 0);
     });
 
-    // 1. Agrupar apontamento de Abril/2026 (mes=4, ano=2026)
+    // 1. Agrupar apontamento do mês base de referência
+    const [mbStr, abStr] = mesBase.split('/');
+    const mesBaseNum2 = parseInt(mbStr);
+    const anoBaseNum2 = parseInt(abStr);
     apontamento
-      .filter(a => a.mes === 4 && a.ano === 2026 && a.sigla !== 'DETRAN')
+      .filter(a => a.mes === mesBaseNum2 && a.ano === anoBaseNum2 && a.sigla !== 'DETRAN')
       .forEach(a => {
         const sigla = a.sigla || 'DEMAIS';
         const current = apMap.get(sigla) || 0;
         apMap.set(sigla, current + a.valorTotal);
       });
 
-    // 2. Agrupar faturamento de Abril/2026 (mesAno = '4/2026', Origem = DRC)
+    // 2. Agrupar faturamento do mês base (mesAno = mesBase, Origem = DRC)
     notas
-      .filter(n => n.mesAno === '4/2026' && n.origem === 'DRC' && n.statusNF === 'ABERTA')
+      .filter(n => n.mesAno === mesBase && n.origem === 'DRC' && n.statusNF === 'ABERTA')
       .forEach(n => {
         const sigla = n.classificacao || 'DEMAIS';
         const current = fatMap.get(sigla) || 0;
@@ -214,6 +252,190 @@ export default function VisaoHerick() {
     };
   }, [notas, apontamento]);
 
+  // Função de exportação PDF específica da Visão do Herick
+  const exportPDFHerick = () => {
+    const mesBaseLabel = nomeMeses(mesBase);
+    const mesProxLabel = nomeMeses(mesProximo);
+    const v = activeFaturamento;
+    const doc = new jsPDF();
+
+    // Header Banner
+    doc.setFillColor(30, 58, 95);
+    doc.rect(0, 0, 210, 42, 'F');
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(18);
+    doc.setTextColor(255, 255, 255);
+    doc.text('DESMEMBRAMENTO DE FATURAMENTO — VISÃO COORDENAÇÃO', 14, 17);
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(9.5);
+    doc.setTextColor(190, 218, 255);
+    doc.text('COMPANHIA DE PROCESSAMENTO DE DADOS DO ESTADO DE SÃO PAULO — PRODESP', 14, 25);
+    doc.text(`Competências Pertinentes: ${mesBaseLabel} + ${mesProxLabel}   |   Gerado em: ${new Date().toLocaleDateString('pt-BR')}`, 14, 32);
+    doc.setFillColor(13, 148, 136);
+    doc.rect(0, 40, 210, 2, 'F');
+
+    // Faturamento Total
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(12);
+    doc.setTextColor(15, 23, 42);
+    doc.text('Faturamento Total Consolidado', 14, 52);
+    doc.setFontSize(22);
+    doc.setTextColor(30, 58, 95);
+    doc.text(formatCurrency(v.total, false), 14, 63);
+    doc.setFontSize(9);
+    doc.setTextColor(100, 116, 139);
+    doc.text(`Considera competências ${mesBaseLabel} + ${mesProxLabel} e todos os retroativos`, 14, 70);
+
+    // Tabela de desmembramento
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(12);
+    doc.setTextColor(15, 23, 42);
+    doc.text('Desmembramento por Origem e Período', 14, 82);
+
+    autoTable(doc, {
+      startY: 86,
+      head: [['Origem', 'Período', 'Valor']],
+      body: [
+        ['DRC', `${mesBaseLabel} + ${mesProxLabel} (Pertinentes)`, formatCurrency(v.drc_Pert, false)],
+        ['DRC', 'Retroativas (ant. a ' + mesBaseLabel + ')', formatCurrency(v.drc_Retro, false)],
+        ['DO (Diário Oficial)', `${mesBaseLabel} + ${mesProxLabel} (Pertinentes)`, formatCurrency(v.do_Pert, false)],
+        ['DO (Diário Oficial)', 'Retroativas', formatCurrency(v.do_Retro, false)],
+        ['DETRAN', `${mesBaseLabel} + ${mesProxLabel} (Pertinentes)`, formatCurrency(v.detran_Pert, false)],
+        ['DETRAN', 'Retroativas', formatCurrency(v.detran_Retro, false)],
+        ['FINANCEIRA', `${mesBaseLabel} + ${mesProxLabel} (Pertinentes)`, formatCurrency(v.fin_Pert, false)],
+        ['FINANCEIRA', 'Retroativas', formatCurrency(v.fin_Retro, false)],
+      ],
+      foot: [['TOTAL CONSOLIDADO', '', formatCurrency(v.total, false)]],
+      styles: { fontSize: 9, cellPadding: 3.5, font: 'helvetica' },
+      headStyles: { fillColor: [30, 58, 95], textColor: 255, fontStyle: 'bold' },
+      footStyles: { fillColor: [13, 148, 136], textColor: 255, fontStyle: 'bold' },
+      alternateRowStyles: { fillColor: [248, 250, 252] },
+      columnStyles: { 2: { halign: 'right', fontStyle: 'bold', textColor: [30, 58, 95] } },
+      margin: { left: 14, right: 14 }
+    });
+
+    // Rodapé
+    const pageHeight = doc.internal.pageSize.height;
+    doc.setDrawColor(226, 232, 240);
+    doc.setLineWidth(0.5);
+    doc.line(14, pageHeight - 28, 196, pageHeight - 28);
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(8);
+    doc.setTextColor(100, 116, 139);
+    doc.text('Assinatura do Emissor', 14, pageHeight - 22);
+    doc.line(14, pageHeight - 12, 80, pageHeight - 12);
+    doc.text('Coordenador de Operações', 14, pageHeight - 8);
+    doc.text('Aprovação da Diretoria', 130, pageHeight - 22);
+    doc.line(130, pageHeight - 12, 196, pageHeight - 12);
+    doc.text('Diretoria de Operações', 130, pageHeight - 8);
+
+    doc.save(`Desmembramento_Faturamento_${mesBase.replace('/', '_')}.pdf`);
+  };
+
+  // ============================================================
+  // MODO APRESENTAÇÃO
+  // ============================================================
+  if (isPresentation) {
+    return (
+      <div className="presentation-container animate-in">
+        {/* Header */}
+        <div className="page-header" style={{ borderBottom: '1px solid #334155', paddingBottom: 16 }}>
+          <div className="page-header-info">
+            <h2 className="page-title" style={{ fontSize: '2rem', margin: 0 }}>Desmembramento de Faturamento — Visão Coordenação</h2>
+            <p className="page-subtitle">Competências Pertinentes: {nomeMeses(mesBase)} + {nomeMeses(mesProximo)} · PRODESP</p>
+          </div>
+          <div className="page-header-actions">
+            <button className="btn btn-secondary btn-sm" style={{ backgroundColor: '#1E293B', color: '#F8FAFC', borderColor: '#475569' }} onClick={exportPDFHerick}>
+              <FilePDF size={14} /> Exportar PDF
+            </button>
+            <button className="btn btn-danger btn-sm" onClick={() => setIsPresentation(false)}>
+              <Minimize2 size={14} /> Sair da Apresentação
+            </button>
+          </div>
+        </div>
+
+        {/* Resumo narrativo */}
+        <div className="presentation-executive-summary">
+          <strong>Resumo Analítico:</strong>{' '}
+          Competências pertinentes de <strong>{nomeMeses(mesBase)} + {nomeMeses(mesProximo)}</strong>. Faturamento Total Consolidado: <strong>{formatCurrency(activeFaturamento.total, false)}</strong>.
+          DRC puro pertinente: <strong>{formatCurrency(activeFaturamento.drc_Pert, true)}</strong> · DO: <strong>{formatCurrency(activeFaturamento.do_Pert, true)}</strong> ·
+          DETRAN: <strong>{formatCurrency(activeFaturamento.detran_Pert, true)}</strong> · Financeira: <strong>{formatCurrency(activeFaturamento.fin_Pert, true)}</strong>.
+          Retroativos DRC: <strong>{formatCurrency(activeFaturamento.drc_Retro, true)}</strong>.
+        </div>
+
+        {/* KPIs grandes */}
+        <div className="presentation-kpis">
+          <div className="presentation-kpi-card">
+            <div className="presentation-kpi-label">Faturamento Total</div>
+            <div className="presentation-kpi-value">{formatCurrency(activeFaturamento.total, true)}</div>
+            <div className="presentation-kpi-sub">NFs + NDs · Todas as origens</div>
+          </div>
+          <div className="presentation-kpi-card">
+            <div className="presentation-kpi-label">DRC (Pertinentes)</div>
+            <div className="presentation-kpi-value" style={{ color: '#10B981' }}>{formatCurrency(activeFaturamento.drc_Pert, true)}</div>
+            <div className="presentation-kpi-sub">{nomeMeses(mesBase)} + {nomeMeses(mesProximo)}</div>
+          </div>
+          <div className="presentation-kpi-card">
+            <div className="presentation-kpi-label">DRC (Retroativas)</div>
+            <div className="presentation-kpi-value" style={{ color: '#F59E0B' }}>{formatCurrency(activeFaturamento.drc_Retro, true)}</div>
+            <div className="presentation-kpi-sub">Competências anteriores</div>
+          </div>
+          <div className="presentation-kpi-card">
+            <div className="presentation-kpi-label">DETRAN Total</div>
+            <div className="presentation-kpi-value">{formatCurrency(activeFaturamento.detran_Pert + activeFaturamento.detran_Retro, true)}</div>
+            <div className="presentation-kpi-sub">Pertinente + Retroativo</div>
+          </div>
+        </div>
+
+        {/* Tabela de desmembramento completa */}
+        <div className="card">
+          <div className="card-header">
+            <span className="card-title">📋 Desmembramento Completo por Origem e Período</span>
+            <span className="badge badge-info">{visaoFaturamento === 'BRUTO' ? 'Visão Bruto' : 'Visão Realizado'}</span>
+          </div>
+          <div className="table-wrapper">
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th>Origem</th>
+                  <th>Período</th>
+                  <th style={{ textAlign: 'right' }}>Valor</th>
+                </tr>
+              </thead>
+              <tbody>
+                {[
+                  { origem: 'DRC', periodo: `${nomeMeses(mesBase)} + ${nomeMeses(mesProximo)} (Pertinentes)`, valor: activeFaturamento.drc_Pert, cls: 'success' },
+                  { origem: 'DRC', periodo: 'Retroativas', valor: activeFaturamento.drc_Retro, cls: 'warning' },
+                  { origem: 'DO (Diário Oficial)', periodo: `${nomeMeses(mesBase)} + ${nomeMeses(mesProximo)}`, valor: activeFaturamento.do_Pert, cls: 'success' },
+                  { origem: 'DO (Diário Oficial)', periodo: 'Retroativas', valor: activeFaturamento.do_Retro, cls: 'warning' },
+                  { origem: 'DETRAN', periodo: `${nomeMeses(mesBase)} + ${nomeMeses(mesProximo)}`, valor: activeFaturamento.detran_Pert, cls: 'success' },
+                  { origem: 'DETRAN', periodo: 'Retroativas', valor: activeFaturamento.detran_Retro, cls: 'warning' },
+                  { origem: 'FINANCEIRA', periodo: `${nomeMeses(mesBase)} + ${nomeMeses(mesProximo)}`, valor: activeFaturamento.fin_Pert, cls: 'success' },
+                  { origem: 'FINANCEIRA', periodo: 'Retroativas', valor: activeFaturamento.fin_Retro, cls: 'warning' },
+                ].map((row, i) => (
+                  <tr key={i}>
+                    <td className="bold">{row.origem}</td>
+                    <td><span className={`badge badge-${row.cls}`}>{row.periodo}</span></td>
+                    <td className={`currency ${row.cls}`} style={{ textAlign: 'right', fontSize: '1rem', fontWeight: 700 }}>{formatCurrency(row.valor, false)}</td>
+                  </tr>
+                ))}
+              </tbody>
+              <tfoot>
+                <tr>
+                  <td colSpan={2}><strong>FATURAMENTO TOTAL CONSOLIDADO</strong></td>
+                  <td style={{ textAlign: 'right', fontWeight: 800, fontSize: '1.1rem', color: 'var(--color-primary-light)' }}>{formatCurrency(activeFaturamento.total, false)}</td>
+                </tr>
+              </tfoot>
+            </table>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // ============================================================
+  // LAYOUT PADRÃO
+  // ============================================================
   return (
     <div className="animate-in">
       {/* Cabeçalho de Página */}
@@ -221,8 +443,16 @@ export default function VisaoHerick() {
         <div className="page-header-info">
           <h1 className="page-title">👁️ Visão do Herick</h1>
           <p className="page-subtitle">
-            Análise aprofundada de Gerências e Consolidação de Faturamento Geral (Competência Abr/Mai)
+            Análise aprofundada de Gerências e Consolidação de Faturamento Geral ({nomeMeses(mesBase)} + {nomeMeses(mesProximo)})
           </p>
+        </div>
+        <div className="page-header-actions">
+          <button className="btn btn-primary btn-sm" onClick={() => setIsPresentation(true)}>
+            <Monitor size={14} /> Modo Apresentação
+          </button>
+          <button className="btn btn-secondary btn-sm" onClick={exportPDFHerick}>
+            <FilePDF size={14} /> PDF
+          </button>
         </div>
       </div>
 

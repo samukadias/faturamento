@@ -20,11 +20,13 @@ export function filtrarNotasPorMes(notas: NotaFiscal[], mesAno: string): NotaFis
 // ============================
 // KPIs
 // ============================
+
 export function calcularKPIs(
   notas: NotaFiscal[],
   notasDebito: NotaDebito[],
   apontamento: ApontamentoRecord[],
-  mesAtual: string
+  mesAtual: string,
+  mesReferencia?: string // mês base configurado (ex: "4/2026"). Se não informado, usa mesAtual
 ): KPISummary {
   const isTodos = mesAtual === 'TODOS';
   const parseMAno = (s: string) => {
@@ -60,41 +62,52 @@ export function calcularKPIs(
   const drcAtual = sum(drcAbertas, isAtual);
   const drcRetro = sum(drcAbertas, isRetroativo);
   const doAtual = sum(doAbertas, isAtual);
+  const doRetro = sum(doAbertas, isRetroativo);
   const detranAtual = sum(detranAbertas, isAtual);
   const detranRetro = sum(detranAbertas, isRetroativo);
   const finAtual = sum(finAbertas, isAtual);
   const finRetro = sum(finAbertas, isRetroativo);
 
   const totalND = ndAbertas.reduce((s, n) => s + n.valor, 0);
-  const totalNF = abertas.reduce((s, n) => s + n.valorNotaFiscal, 0);
+  // Subtrai valores DO para evitar dupla contagem (DO está embutido dentro do DRC na base)
+  const totalNF = abertas.reduce((s, n) => s + n.valorNotaFiscal, 0) - doAtual - doRetro;
 
   const apontamentoTotal = apontamento
     .filter(r => isTodos || (r.mes === mesRef && r.ano === anoRef))
     .reduce((s, r) => s + r.valorTotal, 0);
-    
+
+  // Para apontamentoDRC: usa mesReferencia se fornecido, senão usa mesRef
+  const [mesBaseNum, anoBaseNum] = mesReferencia
+    ? mesReferencia.split('/').map(Number)
+    : [mesRef, anoRef];
+
   const apontamentoDRC = apontamento
-    .filter(r => (isTodos || (r.mes === mesRef && r.ano === anoRef)) && r.sigla !== 'DETRAN')
+    .filter(r => (isTodos || (r.mes === mesBaseNum && r.ano === anoBaseNum)) && r.sigla !== 'DETRAN')
     .reduce((s, r) => s + r.valorTotal, 0);
 
-  const faturamentoDRC = drcAtual + drcRetro + doAtual;
-  const percExecucao = apontamentoDRC > 0 ? (drcAtual / apontamentoDRC) * 100 : 0;
+  // faturamentoDRC = DRC (sem o DO) + DO separado
+  const faturamentoDRC = drcAtual - doAtual + drcRetro - doRetro + doAtual + doRetro;
+  // simplificado: drcAtual + drcRetro (o DO já está incluído no total do DRC na base, mas o do card é apenas DRC puro)
+  // Na verdade: total DRC + DO puro, sem contar 2x
+  const percExecucao = apontamentoDRC > 0 ? ((drcAtual - doAtual) / apontamentoDRC) * 100 : 0;
 
   return {
     resumoFaturamentoTotal: totalNF + totalND,
-    drcAtual,
-    drcRetroativo: drcRetro,
+    drcAtual: drcAtual - doAtual, // DRC puro, sem DO
+    drcRetroativo: drcRetro - doRetro, // DRC retro puro
     diarioOficialAtual: doAtual,
     detranAtual,
     detranRetroativo: detranRetro,
     financeiraAtual: finAtual,
     financeiraRetroativo: finRetro,
-    faturamentoDRC,
+    faturamentoDRC: drcAtual + drcRetro, // DRC total inclui DO na base, mostrar total DRC
     apontamentoDRC,
     percExecucao,
     apontamentoTotal,
     faturamentoTotal: totalNF + totalND,
   };
 }
+
 
 // ============================
 // PIVOT TABLE

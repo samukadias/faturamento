@@ -1,6 +1,7 @@
 import { useMemo, useState, useEffect } from 'react';
 import { useDataStore } from '../store/dataStore';
 import { useFilterStore } from '../store/filterStore';
+import { useSettingsStore } from '../store/settingsStore';
 import {
   calcularKPIs, filtrarNotas, gerarPivotGeral, formatCurrency, formatPercent, getMesesDisponiveis
 } from '../services/calculations';
@@ -13,6 +14,7 @@ import { exportRelatorioCompleto, exportKPIsToPDF } from '../services/exportServ
 export default function FaturamentoGeral() {
   const { notas, notasDebito, apontamento, isLoading, error } = useDataStore();
   const { filtros } = useFilterStore();
+  const { mesReferencia } = useSettingsStore();
 
   // Mode state: presentation mode vs standard mode
   const [isPresentation, setIsPresentation] = useState(false);
@@ -31,8 +33,8 @@ export default function FaturamentoGeral() {
   }, [isPresentation]);
 
   const kpis = useMemo(() =>
-    calcularKPIs(notas, notasDebito, apontamento, filtros.mesAno),
-    [notas, notasDebito, apontamento, filtros.mesAno]
+    calcularKPIs(notas, notasDebito, apontamento, filtros.mesAno, mesReferencia),
+    [notas, notasDebito, apontamento, filtros.mesAno, mesReferencia]
   );
 
   const notasFiltradas = useMemo(() =>
