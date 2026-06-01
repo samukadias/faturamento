@@ -1,0 +1,184 @@
+// Prisma Schema — Sistema de Controle de Faturamento PRODESP
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ============================
+// USUÁRIOS
+// ============================
+model User {
+  id        Int      @id @default(autoincrement())
+  email     String   @unique
+  password  String
+  nome      String
+  perfil    Perfil   @default(VISUALIZADOR)
+  ativo     Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("users")
+}
+
+enum Perfil {
+  ADMIN
+  VISUALIZADOR
+}
+
+// ============================
+// NOTAS FISCAIS (Base ERP_Geral)
+// ============================
+model NotaFiscal {
+  id                  Int      @id @default(autoincrement())
+  razaoSocial         String
+  mesAno              String?
+  origem              String
+  classificacao       String?
+  detran              String?
+  grupoCliente        String?
+  periodoReferencia   String?
+  numContrato         String?
+  numESP              String?
+  pracaFaturamento    String?
+  numNotaFiscal       String?
+  dataEmissao         String?
+  statusNF            String   @default("ABERTA")
+  valorNotaFiscal     Float    @default(0)
+  dataVencimento      String?
+  saldoParcelas       Float?   @default(0)
+  valorRecebido       Float?   @default(0)
+  retencaoINSS        Float?   @default(0)
+  retencaoISS         Float?   @default(0)
+  retencaoIRRF        Float?   @default(0)
+  retencaoPASEP       Float?   @default(0)
+  retencaoCOFINS      Float?   @default(0)
+  retencaoCSSL        Float?   @default(0)
+  objetoEspecificacao String?
+  valorBruto          Float?   @default(0)
+  tipoServico         String?
+  importacaoId        Int?
+  createdAt           DateTime @default(now())
+
+  importacao HistoricoImportacao? @relation(fields: [importacaoId], references: [id])
+
+  @@index([origem, statusNF])
+  @@index([mesAno])
+  @@index([numContrato])
+  @@index([razaoSocial])
+  @@map("notas_fiscais")
+}
+
+// ============================
+// NOTAS DE DÉBITO (Base ERP_ND)
+// ============================
+model NotaDebito {
+  id                   Int      @id @default(autoincrement())
+  recurso              String?
+  contrato             String?
+  razaoSocial          String
+  grupoCliente         String?
+  tipoND               String?
+  tipoCriacao          String?
+  numero               String?
+  dataEmissao          String?
+  status               String   @default("ABERTA")
+  valor                Float    @default(0)
+  ultimaDataVencimento String?
+  valorRecebido        Float?   @default(0)
+  saldoParcelas        Float?   @default(0)
+  mesReferencia        String?
+  termo                String?
+  importacaoId         Int?
+  createdAt            DateTime @default(now())
+
+  importacao HistoricoImportacao? @relation(fields: [importacaoId], references: [id])
+
+  @@index([status])
+  @@index([contrato])
+  @@map("notas_debito")
+}
+
+// ============================
+// APONTAMENTO (Base apontamento)
+// ============================
+model Apontamento {
+  id              Int      @id @default(autoincrement())
+  sigla           String?
+  tipoApontamento String?
+  mes             Int?
+  ano             Int?
+  cliente         String
+  pdContrato      String?
+  nroESP          String?
+  termo           String?
+  item            String?
+  subItem         String?
+  descricao       String?
+  sufixo          String?
+  qtdeApontada    Float?   @default(0)
+  precoUnitario   Float?   @default(0)
+  valorTotal      Float    @default(0)
+  importacaoId    Int?
+  createdAt       DateTime @default(now())
+
+  importacao HistoricoImportacao? @relation(fields: [importacaoId], references: [id])
+
+  @@index([mes, ano])
+  @@index([sigla])
+  @@index([pdContrato])
+  @@map("apontamento")
+}
+
+// ============================
+// DE_PARA (Classificação)
+// ============================
+model DePara {
+  id               Int    @id @default(autoincrement())
+  razaoSocial      String
+  numContrato      String?
+  pracaFaturamento String?
+  objetoEsp        String?
+  origem           String?
+  classificacaoPPT String?
+  detranTipo       String?
+
+  @@index([numContrato])
+  @@map("de_para")
+}
+
+// ============================
+// HISTÓRICO DE IMPORTAÇÕES
+// ============================
+model HistoricoImportacao {
+  id               Int      @id @default(autoincrement())
+  mesReferencia    String
+  dataImportacao   DateTime @default(now())
+  totalNF          Float    @default(0)
+  totalND          Float    @default(0)
+  totalApontamento Float    @default(0)
+  faturamentoTotal Float    @default(0)
+  qtdNotasFiscais  Int      @default(0)
+  qtdNotasDebito   Int      @default(0)
+  qtdApontamento   Int      @default(0)
+  usuario          String
+  status           StatusImportacao @default(COMPLETO)
+  observacao       String?
+  createdAt        DateTime @default(now())
+
+  notasFiscais NotaFiscal[]
+  notasDebito  NotaDebito[]
+  apontamento  Apontamento[]
+
+  @@map("historico_importacoes")
+}
+
+enum StatusImportacao {
+  COMPLETO
+  PARCIAL
+  ERRO
+}
